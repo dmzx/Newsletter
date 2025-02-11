@@ -1,5 +1,9 @@
 ## Newsletter Changelog
 
+### 1.0.4 - 2025-02-10
+- Added template save in ACP.
+- Code update for email.
+
 ### 1.0.3 - 2021-07-30
 - Changed code messenger.
 - Code update

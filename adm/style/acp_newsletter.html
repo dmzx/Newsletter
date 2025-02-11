@@ -3,7 +3,13 @@
 {% if S_NEWSLETTER_ENABLE %}
 <script>
 	var form_name = 'acp_newsletter';
-	var text_name = 'message';
+	var text_name = 'newsletter_save_temp';
+	function selectAll() {
+		var textarea = document.getElementById('newsletter_save_temp');
+		textarea.select();
+		document.execCommand('copy');
+		alert('Message copied to clipboard');
+	}
 </script>
 
 <h1>{{ lang('ACP_DMZX_NEWSLETTER_TITLE') }}</h1>
@@ -16,13 +22,13 @@
 {% if PREVIEW %}
 <fieldset>
 	<legend>{{ lang('PREVIEW') }}</legend>
-	<p>{{ PREVIEW }}</p>
+	<div>{{ PREVIEW|raw }}</div>
 </fieldset>
 {% endif %}
 
 {% if S_WARNING %}
 <div class="errorbox">
-	<h3>{{ WARNING }}</h3>
+	<h3>{{ lang('WARNING') }}</h3>
 	<p>{{ WARNING_MSG }}</p>
 </div>
 {% endif %}
@@ -63,8 +69,7 @@
 			<dd><select id="priority" name="mail_priority_flag">{{ S_PRIORITY_OPTIONS }}</select></dd>
 		</dl>
 		<dl>
-			<dt><label for="url">{{ lang('URL') ~ lang('COLON') }}</label><br><span>{{ lang('URL_EXPLAIN') }}</span>
-			</dt>
+			<dt><label for="url">{{ lang('URL') ~ lang('COLON') }}</label><br><span>{{ lang('URL_EXPLAIN') }}</span></dt>
 			<dd><input size="70" name="url" type="url" id="url" value="{{ URL }}"/></dd>
 		</dl>
 		<dl>
@@ -79,9 +84,20 @@
 			<input class="button2" type="submit" name="preview" value="{{ lang('PREVIEW') }}"/>&nbsp;
 			<input class="button1" type="submit" id="submit" name="submit" value="{{ lang('SEND_NEWSLETTER') }}"/>&nbsp;
 			<input class="button2" type="reset" id="reset" name="reset" value="{{ lang('RESET') }}"/>
+			<input class="button2" type="submit" name="save_temp" value="{{ lang('NEWSLETTER_SAVE_TEMP_NEWSLETTER') }}"/>
 			{{ S_FORM_TOKEN }}
 		</p>
 	</fieldset>
+	{% if TEMP_MESSAGE %}
+	<fieldset>
+		<legend>{{ lang('NEWSLETTER_SAVED_TEMPLATE') }}</legend>
+		<dl>
+			<dt><label for="newsletter_save_temp">{{ lang('NEWSLETTER_SAVED_TEMPLATE') }}</label></dt>
+			<dd><textarea id="newsletter_save_temp" rows="10" cols="60">{{ TEMP_MESSAGE }}</textarea></dd>
+			<dd><button type="button" onclick="selectAll()">{{ lang('NEWSLETTER_SELECT_ALL') }}</button></dd>
+		</dl>
+	</fieldset>
+	{% endif %}
 	<fieldset>
 		<legend>{{ lang('NEWSLETTER_VARIABLES') }}</legend>
 		{% for var_variables in loops.var_variables %}

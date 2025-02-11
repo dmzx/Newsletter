@@ -18,6 +18,7 @@ use phpbb\log\log;
 use phpbb\request\request;
 use phpbb\template\template;
 use phpbb\user;
+use phpbb\config\db_text;
 
 class acp_controller
 {
@@ -48,6 +49,9 @@ class acp_controller
 	/** @var manager */
 	protected $ext_manager;
 
+	/** @var db_text */
+	protected $config_text;
+
 	/** @var string */
 	protected $php_ext;
 
@@ -76,6 +80,7 @@ class acp_controller
 		user $user,
 		helper $group_helper,
 		manager $ext_manager,
+		db_text $config_text,
 		$php_ext,
 		$root_path,
 		$adm_relative_path,
@@ -91,6 +96,7 @@ class acp_controller
 		$this->user = $user;
 		$this->group_helper = $group_helper;
 		$this->ext_manager = $ext_manager;
+		$this->config_text = $config_text;
 		$this->php_ext = $php_ext;
 		$this->root_path = $root_path;
 		$this->adm_relative_path = $adm_relative_path;
@@ -104,6 +110,7 @@ class acp_controller
 		$this->submit = $this->request->is_set_post('submit');
 		$this->preview = $this->request->is_set_post('preview');
 		$this->send_test_email = $this->request->is_set_post('send_test_email');
+		$this->save_temp = $this->request->is_set_post('save_temp');
 		add_form_key($this->form_key);
 
 		$error = [];
@@ -118,8 +125,17 @@ class acp_controller
 		$priority = $this->request->variable('mail_priority_flag', MAIL_NORMAL_PRIORITY);
 		$var_replace = $this->template_vars();
 
+		// Load temporarily saved message
+		$temp_message = $this->config_text->get('newsletter_save_temp');
+
 		if ($this->config['email_enable'])
 		{
+			if ($this->save_temp)
+			{
+				$this->config_text->set('newsletter_save_temp', $message);
+				trigger_error($this->language->lang('NEWSLETTER_SAVE_TEMP_SUCCESS') . adm_back_link($this->u_action));
+			}
+
 			if ($this->submit)
 			{
 				if (!check_form_key($this->form_key))
@@ -236,27 +252,18 @@ class acp_controller
 
 						if (!empty($usernames) && count($usernames) !== count($email_count))
 						{
-							$found_usernames = $email_list[$i]['name'];
-							foreach ($usernames as $username)
-							{
-								if (!$found_usernames)
-								{
-									$not_found_users[] = $username;
-								}
-							}
+							$found_usernames = array_column($email_list[$i], 'name');
+							$not_found_users = array_diff($usernames, $found_usernames);
 							$trigger_message .= $this->language->lang('SOME_USERNAMES_NOT_FOUND', implode(', ', $not_found_users));
 						}
 
 						for ($j = 0, $list_size = count($email_list[$i]); $j < $list_size; $j++)
 						{
 							$email_row = $email_list[$i][$j];
-							$this->email_member($email_row['user_id'], $message, $title, $author, $url, $priority);
+							$this->email_member([$email_row['user_id']], $message, $title, $author, $url, $priority);
 						}
 
-						$userlist = array_map(function ($entry)
-						{
-							return $entry['name'];
-						},	$email_list[$i]);
+						$userlist = array_column($email_list[$i], 'name');
 
 						$this->log->add('admin', $this->user->data['user_id'], $this->user->data['session_ip'], 'LOG_NEWSLETTER_EMAIL', false, [implode(', ', $userlist)]);
 					}
@@ -274,7 +281,7 @@ class acp_controller
 
 			if ($this->send_test_email)
 			{
-				$this->email_member($this->user->data['user_id'], $message, $this->language->lang('NEWSLETTER_TEST_EMAIL_SENT'), $author, $url, $priority);
+				$this->email_member([$this->user->data['user_id']], $message, $this->language->lang('NEWSLETTER_TEST_EMAIL_SENT'), $author, $url, $priority);
 				trigger_error($this->language->lang('NEWSLETTER_TEST_EMAIL_SENT') . adm_back_link($this->u_action));
 			}
 		}
@@ -318,6 +325,7 @@ class acp_controller
 			'U_FIND_AUTHOR' => append_sid("{$this->root_path}memberlist.{$this->php_ext}", 'mode=searchuser&amp;form=acp_newsletter&amp;field=author'),
 			'TITLE' => $title,
 			'MESSAGE' => $message,
+			'TEMP_MESSAGE' => $temp_message,
 			'URL' => $url,
 			'AUTHOR' => $author,
 			'S_PRIORITY_OPTIONS' => $s_priority_options,
@@ -328,67 +336,62 @@ class acp_controller
 		]);
 	}
 
-	public function email_member($member_id, $message, $title, $author, $url, $priority)
+	public function email_member($member_ids, $message, $title, $author, $url, $priority)
 	{
-		$emails_sent = 0;
-
-		$sql = 'SELECT user_id, username, user_email, user_lang, user_ip
-			FROM '. $this->tables['users'] .'
-			WHERE '. $this->db->sql_in_set('user_id', $member_id);
-		$result = $this->db->sql_query($sql);
-
-		$users = [];
-
-		while ($row = $this->db->sql_fetchrow($result))
-		{
-			$users[] = $row;
-		}
-
-		$this->db->sql_freeresult($result);
-
 		if (!class_exists('messenger'))
 		{
 			include($this->root_path . 'includes/functions_messenger.' . $this->php_ext);
 		}
 
 		$messenger = new \messenger();
-
 		$xhead_username = ($this->config['board_contact_name']) ? $this->config['board_contact_name'] : $this->user->lang('ADMINISTRATOR');
 
 		// mail headers
 		$messenger->headers('X-AntiAbuse: Board servername - ' . $this->config['server_name']);
 		$messenger->headers('X-AntiAbuse: Username - ' . $xhead_username);
 		$messenger->headers('X-AntiAbuse: User_id - ' . $this->user->data['user_id']);
-
-		// mail content...
 		$messenger->from($this->config['board_contact']);
 
-		foreach ($users as $user)
+		// Fetch user details in batches
+		$batch_size = 100;
+		$emails_sent = 0;
+		$use_html = ($this->ext_manager->is_enabled('dmzx/htmlemail')) ? true : false;
+		$templ = 'newsletter.' . (($use_html) ? 'html' : 'txt');
+
+		for ($i = 0; $i < count($member_ids); $i += $batch_size)
 		{
-			$var_replace = $this->template_vars();
-			$str_replace = [$this->config['sitename'], generate_board_url(), $user['username'], $user['user_email'], $url, $author];
-			$message = str_replace($var_replace, $str_replace, $message);
+			$batch = array_slice($member_ids, $i, $batch_size);
+			$sql = 'SELECT user_id, username, user_email, user_lang, user_ip
+					FROM ' . $this->tables['users'] . '
+					WHERE ' . $this->db->sql_in_set('user_id', $batch);
+			$result = $this->db->sql_query($sql);
 
-			$use_html = ($this->ext_manager->is_enabled('dmzx/htmlemail')) ? true : false;
-			($use_html) ? $messenger->set_mail_html(true) : null;
-
-			$templ = 'newsletter.' . (($use_html) ? 'html' : 'txt');
-			$messenger->template('@dmzx_newsletter/' . $templ, $user['user_lang']);
-			$messenger->to($user['user_email'], $user['username']);
-			$messenger->set_mail_priority($priority);
-			$messenger->assign_vars([
-				'MESSAGE' => htmlspecialchars_decode($message),
-				'SUBJECT' => $title,
-			]);
-			$mail_sent = $messenger->send(NOTIFY_EMAIL, false);
-
-			if ($mail_sent)
+			while ($row = $this->db->sql_fetchrow($result))
 			{
-				$emails_sent++;
+				$var_replace = $this->template_vars();
+				$str_replace = [$this->config['sitename'], generate_board_url(), $row['username'], $row['user_email'], $url, $author];
+				$formatted_message = str_replace($var_replace, $str_replace, $message);
+
+				($use_html) ? $messenger->set_mail_html(true) : null;
+				$messenger->template('@dmzx_newsletter/' . $templ, $row['user_lang']);
+				$messenger->to($row['user_email'], $row['username']);
+				$messenger->set_mail_priority($priority);
+				$messenger->assign_vars([
+					'MESSAGE' => htmlspecialchars_decode($formatted_message),
+					'SUBJECT' => $title,
+				]);
+				$mail_sent = $messenger->send(NOTIFY_EMAIL, false);
+
+				if ($mail_sent)
+				{
+					$emails_sent++;
+				}
+				$messenger->reset();
 			}
-			$messenger->reset();
+			$this->db->sql_freeresult($result);
 		}
 		$messenger->save_queue();
+		return $emails_sent;
 	}
 
 	public function template_vars()
